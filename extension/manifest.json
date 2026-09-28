@@ -7,6 +7,9 @@
     "activeTab",
     "scripting"
   ],
+  "host_permissions": [
+    "http://localhost:11434/*"
+  ],
   "action": {
     "default_popup": "popup.html"
   }
