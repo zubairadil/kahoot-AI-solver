@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Kahoot AI Assistant",
-  "version": "1.1",
+  "version": "1.2",
   "description": "Extracts questions and sends them to a local AI assistant.",
   "permissions": [
     "activeTab",
