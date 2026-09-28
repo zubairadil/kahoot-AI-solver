@@ -175,14 +175,9 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
       return;
     }
 
-    // STRICT INCLUSION PROMPT:
-    // The model must choose from the visible options and must not invent a new answer.
-    const prompt = `Task: Select the best possible answer to the question using ONLY the choices listed below.
-
-Rules:
-1. You MUST pick exactly one option from the list below, even if it is imperfect.
-2. Absolutely DO NOT invent your own wording or provide long explanations.
-3. Your final response format must match this format precisely: "Color: Text"
+    // HARDENED CLASSIFICATION PROMPT:
+    // Ask the model for one color only, then map it back to scraped text in JavaScript.
+    const prompt = `Task: Analyze the following question and select the single best color option from the available choices.
 
 Question: ${question}
 
@@ -192,7 +187,9 @@ ${choices.Blue ? `- Blue: ${choices.Blue}` : ''}
 ${choices.Yellow ? `- Yellow: ${choices.Yellow}` : ''}
 ${choices.Green ? `- Green: ${choices.Green}` : ''}
 
-Selection:`;
+Constraint: You must output ONLY the exact color word ("Red", "Blue", "Yellow", or "Green") corresponding to the best answer. Do not include punctuation, quotes, or any extra text.
+
+Selected Color:`;
 
     try {
       const response = await fetch(
@@ -207,7 +204,8 @@ Selection:`;
             prompt: prompt,
             stream: false,
             options: {
-              temperature: 0.1
+              temperature: 0.0,
+              stop: ["\n", "."]
             }
           })
         }
@@ -218,7 +216,28 @@ Selection:`;
       }
 
       const data = await response.json();
-      answerView.innerText = data.response.trim();
+      const cleanedColor =
+        data.response.trim().replace(/[^a-zA-Z]/g, '');
+
+      // Match the selected color back to the exact scraped answer text.
+      if (choices[cleanedColor]) {
+        answerView.innerHTML =
+          `<span style="color: ${cleanedColor.toLowerCase()}; font-weight: bold;">` +
+          `${cleanedColor}: ${choices[cleanedColor]}` +
+          `</span>`;
+
+      } else if (
+        ["Red", "Blue", "Yellow", "Green"].includes(cleanedColor)
+      ) {
+        answerView.innerHTML =
+          `<span style="color: ${cleanedColor.toLowerCase()}; font-weight: bold;">` +
+          `${cleanedColor}` +
+          `</span> (Text block not captured)`;
+
+      } else {
+        // Fallback in case the model ignores the single-word constraint.
+        answerView.innerText = data.response.trim();
+      }
 
     } catch (err) {
       answerView.innerHTML =
