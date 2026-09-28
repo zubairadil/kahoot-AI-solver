@@ -20,6 +20,7 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
     target: { tabId: tab.id },
 
     func: () => {
+      // Find the question text safely
       const qSelectors = [
         '[data-functional-selector="question-block-title"]',
         '[data-functional-selector="block-title"]',
@@ -45,139 +46,119 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
         Green: ""
       };
 
-      const elements = Array.from(
-        document.querySelectorAll('span, div, p, fch-text')
+      // Target choice blocks directly instead of scanning every text node globally
+      const blocks = document.querySelectorAll(
+        '[data-functional-selector^="answer-"], ' +
+        '[class*="answer-card"], ' +
+        '[class*="ChoiceOutcomeButton"]'
       );
 
-      elements.forEach(el => {
-        const rect = el.getBoundingClientRect();
+      blocks.forEach(block => {
+        const textEl = block.querySelector(
+          '[data-functional-selector="card-title"], span, p, div'
+        );
 
-        if (rect.width === 0 || rect.height === 0) return;
+        if (!textEl) return;
 
-        const computed = window.getComputedStyle(el);
+        let rawText = textEl.innerText || "";
 
-        if (
-          computed.display === 'none' ||
-          computed.visibility === 'hidden'
-        ) {
-          return;
-        }
-
-        if (
-          !el.innerText ||
-          el.children.length > 0 ||
-          el.innerText.trim().length > 100
-        ) {
-          return;
-        }
-
-        const text = el.innerText
+        // Clean out layout shape icons from text strings
+        let cleanText = rawText
           .replace(/[▲◆■●▼◄▶✖✔]/g, '')
           .trim();
 
-        if (text.length <= 1) return;
+        if (!cleanText) return;
 
-        let current = el;
-        let detectedColor = null;
-
-        while (current && current !== document.body) {
-          // Inspect the computed style and structural metadata instead of
-          // relying only on fixed answer indexes.
-          const style = window.getComputedStyle(current);
-          const bg = style.backgroundColor;
-
-          const className =
-            current.className
-              ? String(current.className).toLowerCase()
-              : '';
-
-          const funcSelector =
-            current.getAttribute('data-functional-selector') || '';
-
-          const combinedStr = className + " " + funcSelector;
-
-          if (
-            bg.includes('rgb(226, 27, 60)') ||
-            combinedStr.includes('red') ||
-            (
-              combinedStr.includes('answer-0') &&
-              !document.querySelector(
-                '[data-functional-selector*="answer-2"]'
-              )
-            )
-          ) {
-            // Historical True/False special case.
-            if (
-              combinedStr.includes('answer-0') &&
-              document.body.innerText.includes('True\nFalse')
-            ) {
-              detectedColor = "Blue";
-            } else {
-              detectedColor = "Red";
-            }
-          }
-
-          // Primary color checking fallbacks.
-          if (
-            combinedStr.includes('red') ||
-            combinedStr.includes('card-0') ||
-            bg.includes('226, 27')
-          ) {
-            detectedColor = "Red";
-
-          } else if (
-            combinedStr.includes('blue') ||
-            combinedStr.includes('card-1') ||
-            bg.includes('19, 104')
-          ) {
-            detectedColor = "Blue";
-
-          } else if (
-            combinedStr.includes('yellow') ||
-            combinedStr.includes('card-2') ||
-            bg.includes('216, 158')
-          ) {
-            detectedColor = "Yellow";
-
-          } else if (
-            combinedStr.includes('green') ||
-            combinedStr.includes('card-3') ||
-            bg.includes('38, 137')
-          ) {
-            detectedColor = "Green";
-          }
-
-          // True/False edge-case override verification.
-          if (
-            funcSelector.includes('answer-0') &&
-            !document.querySelector(
-              '[data-functional-selector*="answer-2"]'
-            )
-          ) {
-            detectedColor = "Blue";
-          } else if (
-            funcSelector.includes('answer-1') &&
-            !document.querySelector(
-              '[data-functional-selector*="answer-2"]'
-            )
-          ) {
-            detectedColor = "Red";
-          }
-
-          if (detectedColor) break;
-
-          current = current.parentElement;
-        }
+        // Determine the actual layout color based on Kahoot design tokens
+        const htmlStr = block.outerHTML.toLowerCase();
+        const style = window.getComputedStyle(block);
+        const bg = style.backgroundColor;
 
         if (
-          detectedColor &&
-          text.toLowerCase() !== detectedColor.toLowerCase()
+          htmlStr.includes('red') ||
+          htmlStr.includes('triangle') ||
+          bg.includes('226, 27') ||
+          bg.includes('rgb(226,')
         ) {
-          if (text.length > choices[detectedColor].length) {
-            choices[detectedColor] = text;
-          }
+          choices.Red = cleanText;
+
+        } else if (
+          htmlStr.includes('blue') ||
+          htmlStr.includes('diamond') ||
+          bg.includes('19, 104') ||
+          bg.includes('rgb(19,')
+        ) {
+          choices.Blue = cleanText;
+
+        } else if (
+          htmlStr.includes('yellow') ||
+          htmlStr.includes('circle') ||
+          bg.includes('216, 158') ||
+          bg.includes('rgb(216,')
+        ) {
+          choices.Yellow = cleanText;
+
+        } else if (
+          htmlStr.includes('green') ||
+          htmlStr.includes('square') ||
+          bg.includes('38, 137') ||
+          bg.includes('rgb(38,')
+        ) {
+          choices.Green = cleanText;
         }
       });
+
+      // Fallback: if direct layout blocks do not match, inspect nearby
+      // leaf text and infer color from shape / answer markers.
+      if (
+        !choices.Red &&
+        !choices.Blue &&
+        !choices.Yellow &&
+        !choices.Green
+      ) {
+        const fallbackItems = Array.from(
+          document.querySelectorAll('span, p, div')
+        );
+
+        fallbackItems.forEach(el => {
+          if (el.children.length > 0 || !el.innerText) return;
+
+          const txt = el.innerText
+            .replace(/[▲◆■●▼◄▶✖✔]/g, '')
+            .trim();
+
+          if (txt.length < 2) return;
+
+          const parentStr = el.parentElement
+            ? el.parentElement.outerHTML.toLowerCase()
+            : '';
+
+          if (
+            parentStr.includes('triangle') ||
+            parentStr.includes('answer-0')
+          ) {
+            choices.Red = txt;
+
+          } else if (
+            parentStr.includes('diamond') ||
+            parentStr.includes('answer-1')
+          ) {
+            choices.Blue = txt;
+
+          } else if (
+            parentStr.includes('circle') ||
+            parentStr.includes('answer-2')
+          ) {
+            choices.Yellow = txt;
+
+          } else if (
+            parentStr.includes('square') ||
+            parentStr.includes('answer-3')
+          ) {
+            choices.Green = txt;
+          }
+        });
+      }
 
       return { question, choices };
     }
@@ -203,17 +184,20 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
       return;
     }
 
-    // Ultra-short prompt optimized for a small local model.
-    const prompt = `Choose the best answer for the question. Respond with ONLY the color name: Red, Blue, Yellow, or Green. Nothing else.
+    // Direct, strict multiple-choice solver prompt format
+    const prompt = `Task: Select the historically or technically correct multiple choice option.
 
 Question: ${question}
 
-Red: ${choices.Red || 'N/A'}
-Blue: ${choices.Blue || 'N/A'}
-Yellow: ${choices.Yellow || 'N/A'}
-Green: ${choices.Green || 'N/A'}
+Available options to choose from:
+${choices.Red ? `- Red: ${choices.Red}` : ''}
+${choices.Blue ? `- Blue: ${choices.Blue}` : ''}
+${choices.Yellow ? `- Yellow: ${choices.Yellow}` : ''}
+${choices.Green ? `- Green: ${choices.Green}` : ''}
 
-Color:`;
+Instruction: Output exactly one word from this list: Red, Blue, Yellow, Green. Do not write full sentences or explanations.
+
+Answer:`;
 
     try {
       const response = await fetch(
@@ -229,7 +213,7 @@ Color:`;
             stream: false,
             options: {
               temperature: 0.0,
-              stop: ["\n", ".", " "]
+              stop: ["\n", ".", " ", ","]
             }
           })
         }
