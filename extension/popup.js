@@ -20,7 +20,6 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
     target: { tabId: tab.id },
 
     func: () => {
-      // Helper function to explicitly ignore hidden screen-reader text
       const isVisible = (el) => {
         const style = window.getComputedStyle(el);
 
@@ -32,7 +31,6 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
           return false;
         }
 
-        // Screen-reader text often uses absolute positioning and 1px clipping
         if (
           style.position === 'absolute' &&
           parseInt(style.width || '0') <= 1
@@ -53,7 +51,6 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
         return true;
       };
 
-      // 1. Extract the question
       let question = "";
 
       const qSelectors = [
@@ -76,7 +73,6 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
         }
       }
 
-      // 2. Extract choices using visual RGB matching
       const choices = {
         Red: "",
         Blue: "",
@@ -84,20 +80,17 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
         Green: ""
       };
 
-      // Grab all potential text leaf nodes
       const elements = Array.from(
         document.querySelectorAll('span, p, div')
       );
 
       elements.forEach(el => {
-        // Only process leaf nodes containing text
         if (el.children.length > 0) return;
 
         let text = (el.innerText || el.textContent || "")
           .replace(/[▲◆■●▼◄▶✖✔]/g, '')
           .trim();
 
-        // Filter empty strings, tiny text, and screen-reader artifacts
         if (
           text.length < 2 ||
           text.includes("seconds left") ||
@@ -111,7 +104,6 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
         let current = el;
         let colorFound = null;
 
-        // Walk up the DOM tree until one of Kahoot's background colors is found
         while (current && current !== document.body) {
           const style = window.getComputedStyle(current);
           const bg = style.backgroundColor;
@@ -125,7 +117,6 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
             const g = parseInt(rgbMatch[2]);
             const b = parseInt(rgbMatch[3]);
 
-            // Fuzzy color matching (+/- 25)
             if (
               Math.abs(r - 226) < 25 &&
               Math.abs(g - 27) < 25 &&
@@ -158,7 +149,6 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
           current = current.parentElement;
         }
 
-        // Store the longest valid string found inside that colored container
         if (colorFound) {
           if (text.length > choices[colorFound].length) {
             choices[colorFound] = text;
@@ -191,19 +181,20 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
       return;
     }
 
-    const prompt = `Task: Select the historically or technically correct multiple choice option.
+    // Upgraded prompt with context and an expert persona
+    const prompt = `You are a highly intelligent expert in IT, Business Systems, and General Knowledge. Your task is to select the correct answer to the following multiple-choice question.
 
-Question: ${question}
+Question: "${question}"
 
-Available options to choose from:
-${choices.Red ? `- Red: ${choices.Red}` : ''}
-${choices.Blue ? `- Blue: ${choices.Blue}` : ''}
-${choices.Yellow ? `- Yellow: ${choices.Yellow}` : ''}
-${choices.Green ? `- Green: ${choices.Green}` : ''}
+Available Options:
+${choices.Red ? `Red: ${choices.Red}` : ''}
+${choices.Blue ? `Blue: ${choices.Blue}` : ''}
+${choices.Yellow ? `Yellow: ${choices.Yellow}` : ''}
+${choices.Green ? `Green: ${choices.Green}` : ''}
 
-Instruction: Output exactly one word from this list: Red, Blue, Yellow, Green. Do not write full sentences or explanations.
+Instructions: Evaluate the options carefully. Respond with ONLY the single color name (Red, Blue, Yellow, or Green) that corresponds to the correct answer. Do not write any other text.
 
-Answer:`;
+Correct Color:`;
 
     try {
       const response = await fetch(
@@ -218,8 +209,7 @@ Answer:`;
             prompt: prompt,
             stream: false,
             options: {
-              temperature: 0.0,
-              stop: ["\n", ".", " ", ","]
+              temperature: 0.0
             }
           })
         }
@@ -231,23 +221,34 @@ Answer:`;
 
       const data = await response.json();
 
-      const cleanedColor =
-        data.response.trim().replace(/[^a-zA-Z]/g, '');
+      // Clean up the output to ensure it maps to one of the four colors
+      const aiResponse = data.response.trim();
+      let cleanedColor = "";
 
-      if (choices[cleanedColor]) {
+      if (aiResponse.toLowerCase().includes("red")) {
+        cleanedColor = "Red";
+      } else if (aiResponse.toLowerCase().includes("blue")) {
+        cleanedColor = "Blue";
+      } else if (aiResponse.toLowerCase().includes("yellow")) {
+        cleanedColor = "Yellow";
+      } else if (aiResponse.toLowerCase().includes("green")) {
+        cleanedColor = "Green";
+      }
+
+      if (cleanedColor && choices[cleanedColor]) {
         answerView.innerHTML =
           `<span style="color: ${cleanedColor.toLowerCase()}; font-weight: bold; font-size: 20px;">` +
           `${cleanedColor}: ${choices[cleanedColor]}` +
           `</span>`;
       } else {
         answerView.innerText =
-          cleanedColor || data.response.trim();
+          aiResponse || "Error parsing AI response";
       }
 
     } catch (err) {
       answerView.innerHTML =
         `<span style="color:red; font-size:12px;">` +
-        `Connection Error.` +
+        `Connection Error. Check if Ollama is running.` +
         `</span>`;
 
       console.error(err);
