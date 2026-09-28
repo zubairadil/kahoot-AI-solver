@@ -1,32 +1,181 @@
-import keyboard
-import pyautogui
 import cv2
 import numpy as np
+import pyautogui
 import easyocr
-import warnings
 import ollama
+import keyboard
+import warnings
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
-# Initialize OCR reader once globally
+# Initialize OCR once
 reader = easyocr.Reader(['en'], gpu=False)
 
 
-def ask_local_ai(question, choices_dict):
-    c1 = choices_dict.get("Red", "N/A")
-    c2 = choices_dict.get("Blue", "N/A")
-    c3 = choices_dict.get("Yellow", "N/A")
-    c4 = choices_dict.get("Green", "N/A")
+def get_text_from_roi(img, contour):
+    """Crops a contour region and extracts text cleanly."""
+    x, y, w, h = cv2.boundingRect(contour)
 
+    # Add a tiny padding to not cut off characters near edges
+    padding = 5
+    roi = img[
+        max(0, y - padding):min(img.shape[0], y + h + padding),
+        max(0, x - padding):min(img.shape[1], x + w + padding)
+    ]
+
+    if roi.size == 0:
+        return ""
+
+    # Run OCR on the isolated block
+    results = reader.readtext(roi)
+    text = " ".join([res[1] for res in results]).strip()
+    return text
+
+
+def extract_and_solve_hsv():
+    print("\n📸 Capturing screen...")
+
+    full_screenshot = pyautogui.screenshot()
+    frame = cv2.cvtColor(np.array(full_screenshot), cv2.COLOR_RGB2BGR)
+
+    # Convert to HSV color space for resilient color matching
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+    # Define broad HSV ranges for Kahoot's signature colors
+    # Adjust slightly if your monitor profile alters colors drastically
+    color_ranges = {
+        "Red": ((0, 150, 100), (10, 255, 255)),
+        "Red2": ((170, 150, 100), (180, 255, 255)),
+        "Blue": ((100, 150, 100), (140, 255, 255)),
+        "Yellow": ((15, 150, 100), (35, 255, 255)),
+        "Green": ((40, 100, 50), (85, 255, 255)),
+        "White": ((0, 0, 200), (180, 30, 255))
+    }
+
+    extracted_data = {
+        "Question": "",
+        "Red": "",
+        "Blue": "",
+        "Yellow": "",
+        "Green": ""
+    }
+
+    # 1. Isolate Answer Blocks via Contours
+    for color, (lower, upper) in color_ranges.items():
+        if color == "Red2":
+            continue  # Handled together with Red
+
+        if color == "Red":
+            mask1 = cv2.inRange(
+                hsv,
+                np.array(color_ranges["Red"][0]),
+                np.array(color_ranges["Red"][1])
+            )
+            mask2 = cv2.inRange(
+                hsv,
+                np.array(color_ranges["Red2"][0]),
+                np.array(color_ranges["Red2"][1])
+            )
+            mask = cv2.bitwise_or(mask1, mask2)
+        else:
+            mask = cv2.inRange(
+                hsv,
+                np.array(lower),
+                np.array(upper)
+            )
+
+        # Find structural blocks matching the color
+        contours, _ = cv2.findContours(
+            mask,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE
+        )
+
+        # Filter contours by size to avoid tiny UI accents or icons
+        valid_contours = [
+            c for c in contours
+            if cv2.contourArea(c) > 5000
+        ]
+
+        if valid_contours:
+            # Pick the largest area block matching the color signature
+            best_contour = max(valid_contours, key=cv2.contourArea)
+
+            text = get_text_from_roi(frame, best_contour)
+
+            # Cleanup list preserved from the historical development document.
+            for icon in ["▲", "◆", "■", "●", "t", "a", "o", "v"]:
+                text = text.replace(icon, "")
+
+            if color == "White":
+                # Kahoot often puts the question inside a white box,
+                # or the background may vary.
+                # If multiple large white boxes exist, the one with the most
+                # text is likely our target.
+                best_text = ""
+
+                for c in valid_contours:
+                    t = get_text_from_roi(frame, c)
+
+                    if len(t) > len(best_text):
+                        best_text = t
+
+                extracted_data["Question"] = best_text
+            else:
+                extracted_data[color] = text.strip()
+
+    print("\n--- Layout-Agnostic Extracted Game Text ---")
+    print(
+        f"Question: "
+        f"{extracted_data['Question'] if extracted_data['Question'] else '[Fallback to Global OCR needed]'}"
+    )
+
+    for col in ["Red", "Blue", "Yellow", "Green"]:
+        print(f"- {col}: {extracted_data[col]}")
+
+    print("------------------------------------------\n")
+
+    # Fallback:
+    # If white box detection fails due to a custom theme background,
+    # search the top half of the screen text for the question.
+    if not extracted_data["Question"]:
+        print("⚠️ White box query failed, activating top-screen fallback OCR...")
+
+        h, w, _ = frame.shape
+        top_slice = frame[0:int(h * 0.6), 0:w]
+
+        res = reader.readtext(top_slice)
+
+        # Combine longer text sentences while excluding system indicators
+        q_elements = [
+            r[1]
+            for r in res
+            if len(r[1]) > 10 and "kahoot" not in r[1].lower()
+        ]
+
+        if q_elements:
+            extracted_data["Question"] = " ".join(q_elements)
+            print(f"Fallback Question Found: {extracted_data['Question']}")
+
+    if extracted_data["Question"]:
+        ask_local_ai(
+            extracted_data["Question"],
+            extracted_data
+        )
+    else:
+        print("❌ Could not cleanly isolate the question text.")
+
+
+def ask_local_ai(question, choices_dict):
     prompt = f"""You are an expert multiple-choice solver. Analyze the following quiz question and select the single best option from the choices provided. Respond with ONLY the color label and the exact text of the correct answer. Do not explain your reasoning.
 
-Question: {question.strip()}
+Question: {question}
 
 Choices:
-- Red: {c1}
-- Blue: {c2}
-- Yellow: {c3}
-- Green: {c4}
+- Red: {choices_dict['Red']}
+- Blue: {choices_dict['Blue']}
+- Yellow: {choices_dict['Yellow']}
+- Green: {choices_dict['Green']}
 
 Correct Answer:"""
 
@@ -38,184 +187,15 @@ Correct Answer:"""
             prompt=prompt,
             options={"num_thread": 4}
         )
-        return response['response'].strip()
-    except Exception as e:
-        return f"AI Processing Error: {str(e)}"
-
-
-def extract_and_solve_dynamic_quadrants():
-    # 1. Capture screen and crop out browser top bar / taskbar clutter
-    full_screenshot = pyautogui.screenshot()
-    frame = cv2.cvtColor(np.array(full_screenshot), cv2.COLOR_RGB2BGR)
-
-    h, w, _ = frame.shape
-
-    # Crop slightly to eliminate standard taskbars, leaving the entire viewport active
-    content_top = int(h * 0.05)
-    content_bottom = int(h * 0.95)
-    img = frame[content_top:content_bottom, 0:w].copy()
-    gh, gw, _ = img.shape
-
-    cv2.imwrite("step1_raw_game_zone.png", img)
-    print("\nReading screen text elements...")
-
-    ocr_results = reader.readtext(img)
-
-    # Filter text entries
-    valid_elements = []
-
-    for bbox, text, prob in ocr_results:
-        text = text.strip()
-
-        # Skip small irrelevant UI text strings or systemic UI components
-        if (
-            len(text) <= 1
-            or text.lower() in ["skip timer", "answers", "quiz", "kahoot!"]
-            or text.isdigit()
-        ):
-            continue
-
-        if "kahoot.it" in text.lower() or "play.kahoot.it" in text.lower():
-            continue
-
-        x_min, y_min = int(bbox[0][0]), int(bbox[0][1])
-        x_max, y_max = int(bbox[2][0]), int(bbox[2][1])
-
-        box_width = x_max - x_min
-        box_height = y_max - y_min
-
-        # CRITICAL FIX:
-        # Ignore small decorative text components (usernames, icons, counters)
-        if box_width < 80 and box_height < 50:
-            continue
-
-        cx = (x_min + x_max) / 2
-        cy = (y_min + y_max) / 2
-
-        valid_elements.append({
-            'text': text,
-            'cy': cy,
-            'cx': cx,
-            'bbox': (x_min, y_min, x_max, y_max)
-        })
-
-    if not valid_elements:
-        print("❌ No valid text elements found on screen.")
-        return
-
-    # 2. Separate Question elements from Answer elements using screen real-estate height ratios
-    question_parts = []
-    answer_elements = []
-
-    # The bottom answer container panel on Kahoot typically spans the bottom 35-40% of the game window
-    answer_zone_threshold_y = gh * 0.65
-
-    for el in valid_elements:
-        # Filter out Kahoot geometric prefix markers if captured textually
-        for marker in ["▲", "◆", "■", "●"]:
-            el['text'] = el['text'].replace(marker, "").strip()
-
-        if el['cy'] < answer_zone_threshold_y:
-            question_parts.append(el)
-        else:
-            answer_elements.append(el)
-
-    # Reconstruct the question string (sorted naturally top-to-bottom, left-to-right)
-    question_parts.sort(key=lambda e: (e['cy'], e['cx']))
-    question_text = " ".join([e['text'] for e in question_parts])
-
-    # 3. Dynamic 4-Quadrant Splitting for Answers
-    final_choices = {
-        "Red": [],
-        "Blue": [],
-        "Yellow": [],
-        "Green": []
-    }
-
-    mid_x = gw / 2
-
-    # Compute the dynamic horizontal split line between the top and bottom rows of answers
-    if answer_elements:
-        all_answer_ys = [el['cy'] for el in answer_elements]
-        mid_y = (min(all_answer_ys) + max(all_answer_ys)) / 2
-    else:
-        mid_y = gh * 0.82  # Fallback baseline split if zone is empty
-
-    visual_img = img.copy()
-
-    # Route answer strings matching geometric box grids
-    for el in answer_elements:
-        x_min, y_min, x_max, y_max = el['bbox']
-
-        # Quadrant 1: Top Left -> Red Block
-        if el['cx'] < mid_x and el['cy'] <= mid_y:
-            final_choices["Red"].append(el['text'])
-            cv2.rectangle(
-                visual_img,
-                (x_min, y_min),
-                (x_max, y_max),
-                (0, 0, 255),
-                2
-            )
-
-        # Quadrant 2: Top Right -> Blue Block
-        elif el['cx'] >= mid_x and el['cy'] <= mid_y:
-            final_choices["Blue"].append(el['text'])
-            cv2.rectangle(
-                visual_img,
-                (x_min, y_min),
-                (x_max, y_max),
-                (255, 0, 0),
-                2
-            )
-
-        # Quadrant 3: Bottom Left -> Yellow Block
-        elif el['cx'] < mid_x and el['cy'] > mid_y:
-            final_choices["Yellow"].append(el['text'])
-            cv2.rectangle(
-                visual_img,
-                (x_min, y_min),
-                (x_max, y_max),
-                (0, 255, 255),
-                2
-            )
-
-        # Quadrant 4: Bottom Right -> Green Block
-        elif el['cx'] >= mid_x and el['cy'] > mid_y:
-            final_choices["Green"].append(el['text'])
-            cv2.rectangle(
-                visual_img,
-                (x_min, y_min),
-                (x_max, y_max),
-                (0, 255, 0),
-                2
-            )
-
-    cv2.imwrite("step4_routed_text.png", visual_img)
-
-    cleaned_choices = {
-        color: " ".join(words).strip()
-        for color, words in final_choices.items()
-    }
-
-    print("\n--- Layout-Agnostic Extracted Game Text ---")
-    print(f"Question: {question_text if question_text else '[No Question Detected]'}\n")
-
-    for color, text in cleaned_choices.items():
-        print(f"- {color}: {text if text else '[Empty]'}")
-
-    print("------------------------------------------\n")
-
-    if question_text:
-        ai_answer = ask_local_ai(question_text, cleaned_choices)
 
         print("\n⚡ --- AI RECOMMENDED ANSWER --- ⚡")
-        print(ai_answer)
+        print(response['response'].strip())
         print("⚡ ------------------------------ ⚡\n")
-    else:
-        print("❌ System structural routing could not isolate a valid question string.")
+
+    except Exception as e:
+        print(f"AI Processing Error: {str(e)}")
 
 
-print("System Active (Dynamic Quadrant Tracking Mode). Press Ctrl+Alt+T.")
-keyboard.add_hotkey("ctrl+alt+t", extract_and_solve_dynamic_quadrants)
+print("System Active (Dynamic Color Segmentation Mode). Press Ctrl+Alt+T.")
+keyboard.add_hotkey("ctrl+alt+t", extract_and_solve_hsv)
 keyboard.wait()
