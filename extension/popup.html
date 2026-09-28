@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      width: 320px;
+      font-family: Arial, sans-serif;
+      padding: 10px;
+      margin: 0;
+      background-color: #f4f4f9;
+    }
+
+    h3 {
+      margin-top: 0;
+      color: #46178f;
+    }
+
+    button {
+      width: 100%;
+      background-color: #46178f;
+      color: white;
+      border: none;
+      padding: 10px;
+      font-size: 14px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+
+    button:hover {
+      background-color: #33116b;
+    }
+
+    .box {
+      background: white;
+      border: 1px solid #ddd;
+      padding: 8px;
+      margin-top: 10px;
+      border-radius: 4px;
+      font-size: 13px;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+
+    #answer {
+      font-weight: bold;
+      color: #2d9d78;
+      font-size: 15px;
+    }
+
+    .label {
+      font-weight: bold;
+      margin-top: 5px;
+      font-size: 11px;
+      color: #666;
+      text-transform: uppercase;
+    }
+  </style>
+</head>
+
+<body>
+  <h3>Kahoot AI Solver</h3>
+
+  <button id="solve-btn">Scan & Solve Game Screen</button>
+
+  <div class="label">Detected Elements:</div>
+  <div id="debug-view" class="box">Click scan to capture text.</div>
+
+  <div class="label">AI Recommended Choice:</div>
+  <div id="answer" class="box">Awaiting scan...</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

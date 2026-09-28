@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Kahoot AI Assistant",
+  "version": "1.0",
+  "description": "Extracts questions and sends them to a local AI assistant.",
+  "permissions": [
+    "activeTab"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.kahoot.it/*"
+      ],
+      "js": [
+        "content.js"
+      ]
+    }
+  ]
+}
