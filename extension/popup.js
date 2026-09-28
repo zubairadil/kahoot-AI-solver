@@ -20,7 +20,42 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
     target: { tabId: tab.id },
 
     func: () => {
-      // Find the question text safely
+      // Helper function to explicitly ignore hidden screen-reader text
+      const isVisible = (el) => {
+        const style = window.getComputedStyle(el);
+
+        if (
+          style.display === 'none' ||
+          style.visibility === 'hidden' ||
+          style.opacity === '0'
+        ) {
+          return false;
+        }
+
+        // Screen-reader text often uses absolute positioning and 1px clipping
+        if (
+          style.position === 'absolute' &&
+          parseInt(style.width || '0') <= 1
+        ) {
+          return false;
+        }
+
+        if (style.clip && style.clip.includes('rect')) {
+          return false;
+        }
+
+        const rect = el.getBoundingClientRect();
+
+        if (rect.width < 5 || rect.height < 5) {
+          return false;
+        }
+
+        return true;
+      };
+
+      // 1. Extract the question
+      let question = "";
+
       const qSelectors = [
         '[data-functional-selector="question-block-title"]',
         '[data-functional-selector="block-title"]',
@@ -28,17 +63,20 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
         '.question-title'
       ];
 
-      let question = "";
-
       for (let selector of qSelectors) {
         const el = document.querySelector(selector);
 
-        if (el && el.innerText.trim().length > 3) {
+        if (
+          el &&
+          isVisible(el) &&
+          el.innerText.trim().length > 3
+        ) {
           question = el.innerText.trim();
           break;
         }
       }
 
+      // 2. Extract choices using visual RGB matching
       const choices = {
         Red: "",
         Blue: "",
@@ -46,126 +84,95 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
         Green: ""
       };
 
-      // Target choice blocks directly instead of scanning every text node globally
-      const blocks = document.querySelectorAll(
-        '[data-functional-selector^="answer-"], ' +
-        '[class*="answer-card"], ' +
-        '[class*="ChoiceOutcomeButton"]'
+      // Grab all potential text leaf nodes
+      const elements = Array.from(
+        document.querySelectorAll('span, p, div')
       );
 
-      blocks.forEach(block => {
-        const textEl = block.querySelector(
-          '[data-functional-selector="card-title"], span, p, div'
-        );
+      elements.forEach(el => {
+        // Only process leaf nodes containing text
+        if (el.children.length > 0) return;
 
-        if (!textEl) return;
-
-        let rawText = textEl.innerText || "";
-
-        // Clean out layout shape icons from text strings
-        let cleanText = rawText
+        let text = (el.innerText || el.textContent || "")
           .replace(/[▲◆■●▼◄▶✖✔]/g, '')
           .trim();
 
-        if (!cleanText) return;
-
-        // Determine the actual layout color based on Kahoot design tokens
-        const htmlStr = block.outerHTML.toLowerCase();
-        const style = window.getComputedStyle(block);
-        const bg = style.backgroundColor;
-
+        // Filter empty strings, tiny text, and screen-reader artifacts
         if (
-          htmlStr.includes('red') ||
-          htmlStr.includes('triangle') ||
-          bg.includes('226, 27') ||
-          bg.includes('rgb(226,')
+          text.length < 2 ||
+          text.includes("seconds left") ||
+          text.includes("Quiz,")
         ) {
-          choices.Red = cleanText;
+          return;
+        }
 
-        } else if (
-          htmlStr.includes('blue') ||
-          htmlStr.includes('diamond') ||
-          bg.includes('19, 104') ||
-          bg.includes('rgb(19,')
-        ) {
-          choices.Blue = cleanText;
+        if (!isVisible(el)) return;
 
-        } else if (
-          htmlStr.includes('yellow') ||
-          htmlStr.includes('circle') ||
-          bg.includes('216, 158') ||
-          bg.includes('rgb(216,')
-        ) {
-          choices.Yellow = cleanText;
+        let current = el;
+        let colorFound = null;
 
-        } else if (
-          htmlStr.includes('green') ||
-          htmlStr.includes('square') ||
-          bg.includes('38, 137') ||
-          bg.includes('rgb(38,')
-        ) {
-          choices.Green = cleanText;
+        // Walk up the DOM tree until one of Kahoot's background colors is found
+        while (current && current !== document.body) {
+          const style = window.getComputedStyle(current);
+          const bg = style.backgroundColor;
+
+          const rgbMatch = bg.match(
+            /rgba?\((\d+),\s*(\d+),\s*(\d+)/
+          );
+
+          if (rgbMatch) {
+            const r = parseInt(rgbMatch[1]);
+            const g = parseInt(rgbMatch[2]);
+            const b = parseInt(rgbMatch[3]);
+
+            // Fuzzy color matching (+/- 25)
+            if (
+              Math.abs(r - 226) < 25 &&
+              Math.abs(g - 27) < 25 &&
+              Math.abs(b - 60) < 25
+            ) {
+              colorFound = "Red";
+            } else if (
+              Math.abs(r - 19) < 25 &&
+              Math.abs(g - 104) < 25 &&
+              Math.abs(b - 206) < 25
+            ) {
+              colorFound = "Blue";
+            } else if (
+              Math.abs(r - 216) < 25 &&
+              Math.abs(g - 158) < 25 &&
+              b < 60
+            ) {
+              colorFound = "Yellow";
+            } else if (
+              Math.abs(r - 38) < 25 &&
+              Math.abs(g - 137) < 25 &&
+              Math.abs(b - 12) < 25
+            ) {
+              colorFound = "Green";
+            }
+          }
+
+          if (colorFound) break;
+
+          current = current.parentElement;
+        }
+
+        // Store the longest valid string found inside that colored container
+        if (colorFound) {
+          if (text.length > choices[colorFound].length) {
+            choices[colorFound] = text;
+          }
         }
       });
-
-      // Fallback: if direct layout blocks do not match, inspect nearby
-      // leaf text and infer color from shape / answer markers.
-      if (
-        !choices.Red &&
-        !choices.Blue &&
-        !choices.Yellow &&
-        !choices.Green
-      ) {
-        const fallbackItems = Array.from(
-          document.querySelectorAll('span, p, div')
-        );
-
-        fallbackItems.forEach(el => {
-          if (el.children.length > 0 || !el.innerText) return;
-
-          const txt = el.innerText
-            .replace(/[▲◆■●▼◄▶✖✔]/g, '')
-            .trim();
-
-          if (txt.length < 2) return;
-
-          const parentStr = el.parentElement
-            ? el.parentElement.outerHTML.toLowerCase()
-            : '';
-
-          if (
-            parentStr.includes('triangle') ||
-            parentStr.includes('answer-0')
-          ) {
-            choices.Red = txt;
-
-          } else if (
-            parentStr.includes('diamond') ||
-            parentStr.includes('answer-1')
-          ) {
-            choices.Blue = txt;
-
-          } else if (
-            parentStr.includes('circle') ||
-            parentStr.includes('answer-2')
-          ) {
-            choices.Yellow = txt;
-
-          } else if (
-            parentStr.includes('square') ||
-            parentStr.includes('answer-3')
-          ) {
-            choices.Green = txt;
-          }
-        });
-      }
 
       return { question, choices };
     }
 
   }, async (results) => {
     if (!results || !results[0] || !results[0].result) {
-      debugView.innerText = "Failed to extract elements from active tab DOM.";
+      debugView.innerText =
+        "Failed to extract elements from active tab DOM.";
       answerView.innerText = "N/A";
       return;
     }
@@ -184,7 +191,6 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
       return;
     }
 
-    // Direct, strict multiple-choice solver prompt format
     const prompt = `Task: Select the historically or technically correct multiple choice option.
 
 Question: ${question}
