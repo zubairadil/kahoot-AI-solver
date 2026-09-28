@@ -20,7 +20,6 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
     target: { tabId: tab.id },
 
     func: () => {
-      // Isolate the question block text safely
       const qSelectors = [
         '[data-functional-selector="question-block-title"]',
         '[data-functional-selector="block-title"]',
@@ -46,13 +45,11 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
         Green: ""
       };
 
-      // Target text leaf elements strictly within the visible game canvas
       const elements = Array.from(
         document.querySelectorAll('span, div, p, fch-text')
       );
 
       elements.forEach(el => {
-        // A) Ignore hidden / non-rendered elements such as privacy or cookie text
         const rect = el.getBoundingClientRect();
 
         if (rect.width === 0 || rect.height === 0) return;
@@ -66,7 +63,6 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
           return;
         }
 
-        // B) Skip container skeletons and very large text blocks
         if (
           !el.innerText ||
           el.children.length > 0 ||
@@ -81,7 +77,6 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
 
         if (text.length <= 1) return;
 
-        // Walk upward to identify the explicit Kahoot answer container
         let current = el;
         let detectedColor = null;
 
@@ -146,7 +141,6 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
           current = current.parentElement;
         }
 
-        // Keep the longest verified answer text for each color
         if (
           detectedColor &&
           text.toLowerCase() !== detectedColor.toLowerCase()
@@ -181,17 +175,24 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
       return;
     }
 
-    const prompt = `You are an expert multiple-choice solver. Analyze the following quiz question and select the single best option from the choices provided. Respond with ONLY the color label and the exact text of the correct answer. Do not explain your reasoning.
+    // STRICT INCLUSION PROMPT:
+    // The model must choose from the visible options and must not invent a new answer.
+    const prompt = `Task: Select the best possible answer to the question using ONLY the choices listed below.
+
+Rules:
+1. You MUST pick exactly one option from the list below, even if it is imperfect.
+2. Absolutely DO NOT invent your own wording or provide long explanations.
+3. Your final response format must match this format precisely: "Color: Text"
 
 Question: ${question}
 
-Choices:
-- Red: ${choices.Red || 'N/A'}
-- Blue: ${choices.Blue || 'N/A'}
-- Yellow: ${choices.Yellow || 'N/A'}
-- Green: ${choices.Green || 'N/A'}
+Available Choices:
+${choices.Red ? `- Red: ${choices.Red}` : ''}
+${choices.Blue ? `- Blue: ${choices.Blue}` : ''}
+${choices.Yellow ? `- Yellow: ${choices.Yellow}` : ''}
+${choices.Green ? `- Green: ${choices.Green}` : ''}
 
-Correct Answer:`;
+Selection:`;
 
     try {
       const response = await fetch(
@@ -204,13 +205,16 @@ Correct Answer:`;
           body: JSON.stringify({
             model: 'llama3',
             prompt: prompt,
-            stream: false
+            stream: false,
+            options: {
+              temperature: 0.1
+            }
           })
         }
       );
 
       if (!response.ok) {
-        throw new Error(`Server responded with code: ${response.status}`);
+        throw new Error(`Server status: ${response.status}`);
       }
 
       const data = await response.json();
