@@ -66,7 +66,7 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
         if (
           !el.innerText ||
           el.children.length > 0 ||
-          el.innerText.trim().length > 150
+          el.innerText.trim().length > 100
         ) {
           return;
         }
@@ -81,62 +81,90 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
         let detectedColor = null;
 
         while (current && current !== document.body) {
-          const funcSelector =
-            current.getAttribute('data-functional-selector') || '';
+          // Inspect the computed style and structural metadata instead of
+          // relying only on fixed answer indexes.
+          const style = window.getComputedStyle(current);
+          const bg = style.backgroundColor;
 
           const className =
             current.className
               ? String(current.className).toLowerCase()
               : '';
 
+          const funcSelector =
+            current.getAttribute('data-functional-selector') || '';
+
+          const combinedStr = className + " " + funcSelector;
+
           if (
-            funcSelector.includes('answer-0') ||
-            funcSelector.includes('choice-0') ||
-            className.includes('card-0') ||
+            bg.includes('rgb(226, 27, 60)') ||
+            combinedStr.includes('red') ||
             (
-              className.includes('red') &&
-              funcSelector.includes('answer')
+              combinedStr.includes('answer-0') &&
+              !document.querySelector(
+                '[data-functional-selector*="answer-2"]'
+              )
             )
           ) {
+            // Historical True/False special case.
+            if (
+              combinedStr.includes('answer-0') &&
+              document.body.innerText.includes('True\nFalse')
+            ) {
+              detectedColor = "Blue";
+            } else {
+              detectedColor = "Red";
+            }
+          }
+
+          // Primary color checking fallbacks.
+          if (
+            combinedStr.includes('red') ||
+            combinedStr.includes('card-0') ||
+            bg.includes('226, 27')
+          ) {
             detectedColor = "Red";
-            break;
 
           } else if (
-            funcSelector.includes('answer-1') ||
-            funcSelector.includes('choice-1') ||
-            className.includes('card-1') ||
-            (
-              className.includes('blue') &&
-              funcSelector.includes('answer')
+            combinedStr.includes('blue') ||
+            combinedStr.includes('card-1') ||
+            bg.includes('19, 104')
+          ) {
+            detectedColor = "Blue";
+
+          } else if (
+            combinedStr.includes('yellow') ||
+            combinedStr.includes('card-2') ||
+            bg.includes('216, 158')
+          ) {
+            detectedColor = "Yellow";
+
+          } else if (
+            combinedStr.includes('green') ||
+            combinedStr.includes('card-3') ||
+            bg.includes('38, 137')
+          ) {
+            detectedColor = "Green";
+          }
+
+          // True/False edge-case override verification.
+          if (
+            funcSelector.includes('answer-0') &&
+            !document.querySelector(
+              '[data-functional-selector*="answer-2"]'
             )
           ) {
             detectedColor = "Blue";
-            break;
-
           } else if (
-            funcSelector.includes('answer-2') ||
-            funcSelector.includes('choice-2') ||
-            className.includes('card-2') ||
-            (
-              className.includes('yellow') &&
-              funcSelector.includes('answer')
+            funcSelector.includes('answer-1') &&
+            !document.querySelector(
+              '[data-functional-selector*="answer-2"]'
             )
           ) {
-            detectedColor = "Yellow";
-            break;
-
-          } else if (
-            funcSelector.includes('answer-3') ||
-            funcSelector.includes('choice-3') ||
-            className.includes('card-3') ||
-            (
-              className.includes('green') &&
-              funcSelector.includes('answer')
-            )
-          ) {
-            detectedColor = "Green";
-            break;
+            detectedColor = "Red";
           }
+
+          if (detectedColor) break;
 
           current = current.parentElement;
         }
@@ -175,21 +203,17 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
       return;
     }
 
-    // HARDENED CLASSIFICATION PROMPT:
-    // Ask the model for one color only, then map it back to scraped text in JavaScript.
-    const prompt = `Task: Analyze the following question and select the single best color option from the available choices.
+    // Ultra-short prompt optimized for a small local model.
+    const prompt = `Choose the best answer for the question. Respond with ONLY the color name: Red, Blue, Yellow, or Green. Nothing else.
 
 Question: ${question}
 
-Available Choices:
-${choices.Red ? `- Red: ${choices.Red}` : ''}
-${choices.Blue ? `- Blue: ${choices.Blue}` : ''}
-${choices.Yellow ? `- Yellow: ${choices.Yellow}` : ''}
-${choices.Green ? `- Green: ${choices.Green}` : ''}
+Red: ${choices.Red || 'N/A'}
+Blue: ${choices.Blue || 'N/A'}
+Yellow: ${choices.Yellow || 'N/A'}
+Green: ${choices.Green || 'N/A'}
 
-Constraint: You must output ONLY the exact color word ("Red", "Blue", "Yellow", or "Green") corresponding to the best answer. Do not include punctuation, quotes, or any extra text.
-
-Selected Color:`;
+Color:`;
 
     try {
       const response = await fetch(
@@ -205,7 +229,7 @@ Selected Color:`;
             stream: false,
             options: {
               temperature: 0.0,
-              stop: ["\n", "."]
+              stop: ["\n", ".", " "]
             }
           })
         }
@@ -216,34 +240,24 @@ Selected Color:`;
       }
 
       const data = await response.json();
+
       const cleanedColor =
         data.response.trim().replace(/[^a-zA-Z]/g, '');
 
-      // Match the selected color back to the exact scraped answer text.
       if (choices[cleanedColor]) {
         answerView.innerHTML =
-          `<span style="color: ${cleanedColor.toLowerCase()}; font-weight: bold;">` +
+          `<span style="color: ${cleanedColor.toLowerCase()}; font-weight: bold; font-size: 20px;">` +
           `${cleanedColor}: ${choices[cleanedColor]}` +
           `</span>`;
-
-      } else if (
-        ["Red", "Blue", "Yellow", "Green"].includes(cleanedColor)
-      ) {
-        answerView.innerHTML =
-          `<span style="color: ${cleanedColor.toLowerCase()}; font-weight: bold;">` +
-          `${cleanedColor}` +
-          `</span> (Text block not captured)`;
-
       } else {
-        // Fallback in case the model ignores the single-word constraint.
-        answerView.innerText = data.response.trim();
+        answerView.innerText =
+          cleanedColor || data.response.trim();
       }
 
     } catch (err) {
       answerView.innerHTML =
         `<span style="color:red; font-size:12px;">` +
-        `Connection Error.<br>` +
-        `Ensure Ollama is running with OLLAMA_ORIGINS="*" enabled.` +
+        `Connection Error.` +
         `</span>`;
 
       console.error(err);
