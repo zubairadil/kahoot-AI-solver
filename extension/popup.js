@@ -5,7 +5,6 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
   debugView.innerText = "Scanning game canvas...";
   answerView.innerText = "Thinking...";
 
-  // 1. Fetch the active web tab context
   const [tab] = await chrome.tabs.query({
     active: true,
     currentWindow: true
@@ -17,12 +16,11 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
     return;
   }
 
-  // 2. Execute DOM scraping within the active page target
   chrome.scripting.executeScript({
     target: { tabId: tab.id },
 
     func: () => {
-      // Robust structural selectors for isolating the query title
+      // Isolate the question block text
       const qSelectors = [
         '[data-functional-selector="question-block-title"]',
         '[data-functional-selector="block-title"]',
@@ -41,7 +39,6 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
         }
       }
 
-      // Initialize clean four-color dictionary mappings
       const choices = {
         Red: "",
         Blue: "",
@@ -49,57 +46,77 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
         Green: ""
       };
 
-      // Query structural elements that Kahoot uses to present multiple-choice buttons
-      const cardElements = document.querySelectorAll(
-        '[data-functional-selector^="answer-"], ' +
-        '[data-functional-selector^="multi-select-button-"], ' +
-        '[class*="card-"], [class*="answer-"], [role="button"]'
+      // 1. Find standalone text elements first instead of broad answer containers.
+      const elements = Array.from(
+        document.querySelectorAll('span, div, p, fch-text')
       );
 
-      cardElements.forEach(el => {
-        const htmlText = el.outerHTML.toLowerCase();
+      elements.forEach(el => {
+        // Skip elements without useful text or large container skeletons.
+        if (!el.innerText || el.children.length > 1) return;
+
+        const text = el.innerText
+          .replace(/[▲◆■●▼◄▶✖✔]/g, '')
+          .trim();
+
+        if (text.length <= 1) return;
+
+        // 2. Walk upward through the DOM to identify which answer block
+        // contains this text.
+        let current = el;
         let detectedColor = null;
 
-        // Map the structural layout nodes to specific colors using explicit design properties
-        if (
-          htmlText.includes("red") ||
-          htmlText.includes("triangle") ||
-          htmlText.includes("choice-0")
-        ) {
-          detectedColor = "Red";
-        } else if (
-          htmlText.includes("blue") ||
-          htmlText.includes("diamond") ||
-          htmlText.includes("choice-1")
-        ) {
-          detectedColor = "Blue";
-        } else if (
-          htmlText.includes("yellow") ||
-          htmlText.includes("circle") ||
-          htmlText.includes("choice-2")
-        ) {
-          detectedColor = "Yellow";
-        } else if (
-          htmlText.includes("green") ||
-          htmlText.includes("square") ||
-          htmlText.includes("choice-3")
-        ) {
-          detectedColor = "Green";
+        while (current && current !== document.body) {
+          const html = current.outerHTML
+            ? current.outerHTML.toLowerCase()
+            : "";
+
+          const entry = current.innerText
+            ? current.innerText.toLowerCase()
+            : "";
+
+          if (
+            html.includes("choice-0") ||
+            html.includes("red") ||
+            entry.includes("triangle")
+          ) {
+            detectedColor = "Red";
+            break;
+          } else if (
+            html.includes("choice-1") ||
+            html.includes("blue") ||
+            entry.includes("diamond")
+          ) {
+            detectedColor = "Blue";
+            break;
+          } else if (
+            html.includes("choice-2") ||
+            html.includes("yellow") ||
+            entry.includes("circle")
+          ) {
+            detectedColor = "Yellow";
+            break;
+          } else if (
+            html.includes("choice-3") ||
+            html.includes("green") ||
+            entry.includes("square")
+          ) {
+            detectedColor = "Green";
+            break;
+          }
+
+          current = current.parentElement;
         }
 
-        if (detectedColor && el.innerText.trim().length > 0) {
-          // FIX: only strip geometric Unicode characters.
-          // Normal letters such as a, t and v are preserved.
-          let cleanText = el.innerText
-            .replace(/[▲◆■●▼◄▶✖✔]/g, '')
-            .trim();
-
-          // Ignore standalone structural color labels
-          if (
-            cleanText.toLowerCase() !== detectedColor.toLowerCase() &&
-            cleanText.length > 0
-          ) {
-            choices[detectedColor] = cleanText;
+        // 3. Keep the longest valid text found for each color.
+        // This avoids a smaller child container overwriting a real answer
+        // with an empty or incomplete string.
+        if (
+          detectedColor &&
+          text.toLowerCase() !== detectedColor.toLowerCase()
+        ) {
+          if (text.length > choices[detectedColor].length) {
+            choices[detectedColor] = text;
           }
         }
       });
@@ -116,7 +133,6 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
 
     const { question, choices } = results[0].result;
 
-    // Update popup debugging display
     debugView.innerHTML =
       `<b>Q:</b> ${question || '<span style="color:red;">Not Detected</span>'}<br>` +
       `🔴 Red: ${choices.Red || '[Empty]'}<br>` +
@@ -125,12 +141,10 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
       `🟢 Green: ${choices.Green || '[Empty]'}`;
 
     if (!question) {
-      answerView.innerText =
-        "Failed to isolate question. Ensure a quiz query is visible on the screen framework.";
+      answerView.innerText = "Failed to isolate question.";
       return;
     }
 
-    // 3. Assemble structural prompt payload context for the LLM
     const prompt = `You are an expert multiple-choice solver. Analyze the following quiz question and select the single best option from the choices provided. Respond with ONLY the color label and the exact text of the correct answer. Do not explain your reasoning.
 
 Question: ${question}
@@ -170,8 +184,7 @@ Correct Answer:`;
       answerView.innerHTML =
         `<span style="color:red; font-size:12px;">` +
         `Ollama Connection Error.<br>` +
-        `Make sure Ollama is open and running in your shell environment ` +
-        `with OLLAMA_ORIGINS="*" enabled.` +
+        `Make sure Ollama is open and running with OLLAMA_ORIGINS="*" enabled.` +
         `</span>`;
 
       console.error(err);
