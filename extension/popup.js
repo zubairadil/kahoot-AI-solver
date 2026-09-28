@@ -20,7 +20,7 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
     target: { tabId: tab.id },
 
     func: () => {
-      // Isolate the question block text
+      // Isolate the question block text safely
       const qSelectors = [
         '[data-functional-selector="question-block-title"]',
         '[data-functional-selector="block-title"]',
@@ -46,14 +46,34 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
         Green: ""
       };
 
-      // 1. Find standalone text elements first instead of broad answer containers.
+      // Target text leaf elements strictly within the visible game canvas
       const elements = Array.from(
         document.querySelectorAll('span, div, p, fch-text')
       );
 
       elements.forEach(el => {
-        // Skip elements without useful text or large container skeletons.
-        if (!el.innerText || el.children.length > 1) return;
+        // A) Ignore hidden / non-rendered elements such as privacy or cookie text
+        const rect = el.getBoundingClientRect();
+
+        if (rect.width === 0 || rect.height === 0) return;
+
+        const computed = window.getComputedStyle(el);
+
+        if (
+          computed.display === 'none' ||
+          computed.visibility === 'hidden'
+        ) {
+          return;
+        }
+
+        // B) Skip container skeletons and very large text blocks
+        if (
+          !el.innerText ||
+          el.children.length > 0 ||
+          el.innerText.trim().length > 150
+        ) {
+          return;
+        }
 
         const text = el.innerText
           .replace(/[▲◆■●▼◄▶✖✔]/g, '')
@@ -61,45 +81,63 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
 
         if (text.length <= 1) return;
 
-        // 2. Walk upward through the DOM to identify which answer block
-        // contains this text.
+        // Walk upward to identify the explicit Kahoot answer container
         let current = el;
         let detectedColor = null;
 
         while (current && current !== document.body) {
-          const html = current.outerHTML
-            ? current.outerHTML.toLowerCase()
-            : "";
+          const funcSelector =
+            current.getAttribute('data-functional-selector') || '';
 
-          const entry = current.innerText
-            ? current.innerText.toLowerCase()
-            : "";
+          const className =
+            current.className
+              ? String(current.className).toLowerCase()
+              : '';
 
           if (
-            html.includes("choice-0") ||
-            html.includes("red") ||
-            entry.includes("triangle")
+            funcSelector.includes('answer-0') ||
+            funcSelector.includes('choice-0') ||
+            className.includes('card-0') ||
+            (
+              className.includes('red') &&
+              funcSelector.includes('answer')
+            )
           ) {
             detectedColor = "Red";
             break;
+
           } else if (
-            html.includes("choice-1") ||
-            html.includes("blue") ||
-            entry.includes("diamond")
+            funcSelector.includes('answer-1') ||
+            funcSelector.includes('choice-1') ||
+            className.includes('card-1') ||
+            (
+              className.includes('blue') &&
+              funcSelector.includes('answer')
+            )
           ) {
             detectedColor = "Blue";
             break;
+
           } else if (
-            html.includes("choice-2") ||
-            html.includes("yellow") ||
-            entry.includes("circle")
+            funcSelector.includes('answer-2') ||
+            funcSelector.includes('choice-2') ||
+            className.includes('card-2') ||
+            (
+              className.includes('yellow') &&
+              funcSelector.includes('answer')
+            )
           ) {
             detectedColor = "Yellow";
             break;
+
           } else if (
-            html.includes("choice-3") ||
-            html.includes("green") ||
-            entry.includes("square")
+            funcSelector.includes('answer-3') ||
+            funcSelector.includes('choice-3') ||
+            className.includes('card-3') ||
+            (
+              className.includes('green') &&
+              funcSelector.includes('answer')
+            )
           ) {
             detectedColor = "Green";
             break;
@@ -108,9 +146,7 @@ document.getElementById('solve-btn').addEventListener('click', async () => {
           current = current.parentElement;
         }
 
-        // 3. Keep the longest valid text found for each color.
-        // This avoids a smaller child container overwriting a real answer
-        // with an empty or incomplete string.
+        // Keep the longest verified answer text for each color
         if (
           detectedColor &&
           text.toLowerCase() !== detectedColor.toLowerCase()
@@ -183,8 +219,8 @@ Correct Answer:`;
     } catch (err) {
       answerView.innerHTML =
         `<span style="color:red; font-size:12px;">` +
-        `Ollama Connection Error.<br>` +
-        `Make sure Ollama is open and running with OLLAMA_ORIGINS="*" enabled.` +
+        `Connection Error.<br>` +
+        `Ensure Ollama is running with OLLAMA_ORIGINS="*" enabled.` +
         `</span>`;
 
       console.error(err);
