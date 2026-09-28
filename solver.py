@@ -43,13 +43,15 @@ Correct Answer:"""
         return f"AI Processing Error: {str(e)}"
 
 
-def extract_and_solve_dynamic_rows():
+def extract_and_solve_dynamic_quadrants():
     # 1. Capture screen and crop out browser top bar / taskbar clutter
     full_screenshot = pyautogui.screenshot()
     frame = cv2.cvtColor(np.array(full_screenshot), cv2.COLOR_RGB2BGR)
 
     h, w, _ = frame.shape
-    content_top = int(h * 0.15)
+
+    # Crop slightly to eliminate standard taskbars, leaving the entire viewport active
+    content_top = int(h * 0.05)
     content_bottom = int(h * 0.95)
     img = frame[content_top:content_bottom, 0:w].copy()
     gh, gw, _ = img.shape
@@ -65,6 +67,7 @@ def extract_and_solve_dynamic_rows():
     for bbox, text, prob in ocr_results:
         text = text.strip()
 
+        # Skip small irrelevant UI text strings or systemic UI components
         if (
             len(text) <= 1
             or text.lower() in ["skip timer", "answers", "quiz", "kahoot!"]
@@ -72,11 +75,19 @@ def extract_and_solve_dynamic_rows():
         ):
             continue
 
-        if "kahoot.it" in text.lower():
+        if "kahoot.it" in text.lower() or "play.kahoot.it" in text.lower():
             continue
 
         x_min, y_min = int(bbox[0][0]), int(bbox[0][1])
         x_max, y_max = int(bbox[2][0]), int(bbox[2][1])
+
+        box_width = x_max - x_min
+        box_height = y_max - y_min
+
+        # CRITICAL FIX:
+        # Ignore small decorative text components (usernames, icons, counters)
+        if box_width < 80 and box_height < 50:
+            continue
 
         cx = (x_min + x_max) / 2
         cy = (y_min + y_max) / 2
@@ -89,79 +100,101 @@ def extract_and_solve_dynamic_rows():
         })
 
     if not valid_elements:
-        print("❌ No text elements found on screen.")
+        print("❌ No valid text elements found on screen.")
         return
 
-    # 2. Cluster text elements into horizontal rows based on Y-coordinate proximity
-    valid_elements.sort(key=lambda e: e['cy'])
+    # 2. Separate Question elements from Answer elements using screen real-estate height ratios
+    question_parts = []
+    answer_elements = []
 
-    rows = []
-    threshold_y = 25
+    # The bottom answer container panel on Kahoot typically spans the bottom 35-40% of the game window
+    answer_zone_threshold_y = gh * 0.65
 
     for el in valid_elements:
-        placed = False
+        # Filter out Kahoot geometric prefix markers if captured textually
+        for marker in ["▲", "◆", "■", "●"]:
+            el['text'] = el['text'].replace(marker, "").strip()
 
-        for row in rows:
-            avg_y = sum([item['cy'] for item in row]) / len(row)
+        if el['cy'] < answer_zone_threshold_y:
+            question_parts.append(el)
+        else:
+            answer_elements.append(el)
 
-            if abs(el['cy'] - avg_y) < threshold_y:
-                row.append(el)
-                placed = True
-                break
+    # Reconstruct the question string (sorted naturally top-to-bottom, left-to-right)
+    question_parts.sort(key=lambda e: (e['cy'], e['cx']))
+    question_text = " ".join([e['text'] for e in question_parts])
 
-        if not placed:
-            rows.append([el])
+    # 3. Dynamic 4-Quadrant Splitting for Answers
+    final_choices = {
+        "Red": [],
+        "Blue": [],
+        "Yellow": [],
+        "Green": []
+    }
 
-    for row in rows:
-        row.sort(key=lambda e: e['cx'])
-
-    # 3. Separate bottom answer rows from question rows
-    answer_rows = rows[-2:] if len(rows) >= 2 else rows[-1:]
-    question_rows = rows[:-2] if len(rows) >= 2 else []
-
-    question_parts = []
-
-    for q_row in question_rows:
-        for el in q_row:
-            if any(char.isdigit() or char == '%' for char in el['text']):
-                continue
-            question_parts.append(el['text'])
-
-    question_text = " ".join(question_parts)
-
-    # 4. Map the choices based on layout quadrants
-    final_choices = {"Red": [], "Blue": [], "Yellow": [], "Green": []}
     mid_x = gw / 2
+
+    # Compute the dynamic horizontal split line between the top and bottom rows of answers
+    if answer_elements:
+        all_answer_ys = [el['cy'] for el in answer_elements]
+        mid_y = (min(all_answer_ys) + max(all_answer_ys)) / 2
+    else:
+        mid_y = gh * 0.82  # Fallback baseline split if zone is empty
+
     visual_img = img.copy()
 
-    # Row 1: Red / Blue
-    if len(answer_rows) >= 1:
-        for el in answer_rows[0]:
-            x_min, y_min, x_max, y_max = el['bbox']
+    # Route answer strings matching geometric box grids
+    for el in answer_elements:
+        x_min, y_min, x_max, y_max = el['bbox']
 
-            if el['cx'] < mid_x:
-                final_choices["Red"].append(el['text'])
-                cv2.rectangle(visual_img, (x_min, y_min), (x_max, y_max), (0, 0, 255), 2)
-            else:
-                final_choices["Blue"].append(el['text'])
-                cv2.rectangle(visual_img, (x_min, y_min), (x_max, y_max), (255, 0, 0), 2)
+        # Quadrant 1: Top Left -> Red Block
+        if el['cx'] < mid_x and el['cy'] <= mid_y:
+            final_choices["Red"].append(el['text'])
+            cv2.rectangle(
+                visual_img,
+                (x_min, y_min),
+                (x_max, y_max),
+                (0, 0, 255),
+                2
+            )
 
-    # Row 2: Yellow / Green
-    if len(answer_rows) == 2:
-        for el in answer_rows[1]:
-            x_min, y_min, x_max, y_max = el['bbox']
+        # Quadrant 2: Top Right -> Blue Block
+        elif el['cx'] >= mid_x and el['cy'] <= mid_y:
+            final_choices["Blue"].append(el['text'])
+            cv2.rectangle(
+                visual_img,
+                (x_min, y_min),
+                (x_max, y_max),
+                (255, 0, 0),
+                2
+            )
 
-            if el['cx'] < mid_x:
-                final_choices["Yellow"].append(el['text'])
-                cv2.rectangle(visual_img, (x_min, y_min), (x_max, y_max), (0, 255, 255), 2)
-            else:
-                final_choices["Green"].append(el['text'])
-                cv2.rectangle(visual_img, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+        # Quadrant 3: Bottom Left -> Yellow Block
+        elif el['cx'] < mid_x and el['cy'] > mid_y:
+            final_choices["Yellow"].append(el['text'])
+            cv2.rectangle(
+                visual_img,
+                (x_min, y_min),
+                (x_max, y_max),
+                (0, 255, 255),
+                2
+            )
+
+        # Quadrant 4: Bottom Right -> Green Block
+        elif el['cx'] >= mid_x and el['cy'] > mid_y:
+            final_choices["Green"].append(el['text'])
+            cv2.rectangle(
+                visual_img,
+                (x_min, y_min),
+                (x_max, y_max),
+                (0, 255, 0),
+                2
+            )
 
     cv2.imwrite("step4_routed_text.png", visual_img)
 
     cleaned_choices = {
-        color: " ".join(words)
+        color: " ".join(words).strip()
         for color, words in final_choices.items()
     }
 
@@ -175,13 +208,14 @@ def extract_and_solve_dynamic_rows():
 
     if question_text:
         ai_answer = ask_local_ai(question_text, cleaned_choices)
+
         print("\n⚡ --- AI RECOMMENDED ANSWER --- ⚡")
         print(ai_answer)
         print("⚡ ------------------------------ ⚡\n")
     else:
-        print("❌ Dynamic row tracking could not isolate a clean question string.")
+        print("❌ System structural routing could not isolate a valid question string.")
 
 
-print("System Active (Dynamic Cluster Mode). Press Ctrl+Alt+T.")
-keyboard.add_hotkey("ctrl+alt+t", extract_and_solve_dynamic_rows)
+print("System Active (Dynamic Quadrant Tracking Mode). Press Ctrl+Alt+T.")
+keyboard.add_hotkey("ctrl+alt+t", extract_and_solve_dynamic_quadrants)
 keyboard.wait()
